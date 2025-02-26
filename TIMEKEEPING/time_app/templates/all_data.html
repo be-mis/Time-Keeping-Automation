@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extracted Data</title>
+    <style>
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        th, td { border: 1px solid black; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        .pagination { margin-top: 20px; text-align: center; }
+        .pagination a, .pagination span { padding: 8px 12px; text-decoration: none; margin: 0 5px; border: 1px solid #ddd; }
+        .pagination a:hover { background-color: #ddd; }
+        .pagination .current { background-color: #4CAF50; color: white; border: 1px solid #4CAF50; }
+        .download-btn { background-color: #4CAF50; color: white; border: 1px solid #4CAF50; }
+        .download-btn:hover{ background-color:rgb(60, 218, 65)}
+    </style>
+</head>
+<body>
+
+
+
+    {% if page_obj %}
+    <h2>Access ID: {{ page_obj.object_list.0.access_id }}</h2>
+
+    {% if file_id %}
+    <a href="{% url 'download-excel' pk=file_id %}">Download</a>
+
+
+    {% endif %}
+
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>In</th>
+                <th>Out</th>
+                <th>In</th>
+                <th>Out</th>
+                <th>In</th>
+                <th>Out</th>
+                <th>Hours Rendered</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in page_obj.object_list.0.table %}
+            <tr>
+                <td>{{ entry.date }}</td>
+                <td>{{ entry.in1 }}</td>
+                <td>{{ entry.out1 }}</td>
+                <td>{{ entry.in2 }}</td>
+                <td>{{ entry.out2 }}</td>
+                <td>{{ entry.in3 }}</td>
+                <td>{{ entry.out3 }}</td>
+                <td>{{ entry.hoursrendered }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Pagination Controls -->
+    <div class="pagination">
+        {% if page_obj.has_previous %}
+            <a href="?page=1">&laquo; First</a>
+            <a href="?page={{ page_obj.previous_page_number }}">Previous</a>
+        {% endif %}
+
+        <span class="current">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+
+        {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}">Next</a>
+            <a href="?page={{ page_obj.paginator.num_pages }}">Last &raquo;</a>
+        {% endif %}
+    </div>
+
+{% else %}
+    <p>No extracted data available.</p>
+{% endif %}
+
+</body>
+</html>
