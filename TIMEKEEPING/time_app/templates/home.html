@@ -1,21 +1,93 @@
-<!-- timecard_form.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upload TimeCard</title>
-    <link rel="stylesheet" href="path/to/your/css">
+    <title>Upload Files</title>
+    <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+    <style>
+        #loading {
+            display: flex;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }   
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 2s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+        }
+
+        .min-h-screen {
+            min-height: 100vh; /* Full height of the viewport */
+        }
+    </style>
 </head>
 <body>
-    <h1>Upload TimeCard</h1>
+<div class="flex items-center justify-center min-h-screen">
 
-    <form method="POST" enctype="multipart/form-data">
-        {% csrf_token %}
-        
-        {{ form.as_p }}  <!-- Corrected here to render the form as paragraphs -->
-        
-        <button type="submit">Submit</button>
-    </form>
+    <div class="w-full max-w-md p-4 border border-gray-300 rounded-md">
+        <form method="POST" enctype="multipart/form-data" id="uploadForm">
+            {% csrf_token %}
+            <h1 class="text-lg font-semibold text-gray-900">TIME-KEEPING AUTOMATION</h1>
+            <div class="mt-4">
+                <label class="block text-sm font-bold">Store:</label>
+                <select name="store" id="store" required class="w-full mt-1 p-2 border rounded-md">
+                    <option value="">--Select Store--</option>
+                    <option value="RDS">RDS</option>
+                    <option value="LEE">LEE</option>
+                    <option value="WDS">WALTERMART</option>
+                    {% comment %} <option value="EVER">EVER</option>
+                    <option value="FISHERMALL">FISHERMALL</option> {% endcomment %}
+                </select>
+            </div>
+            <div class="mt-4">
+                <label class="block text-sm font-bold">Upload File:</label>
+                <div id="drop-area" class="mt-2 p-6 border-2 border-dashed rounded-md text-center flex flex-col items-center justify-center">
+                    <p>Drag and Drop files to upload</p>
+                
+                    <!-- Centered File Input -->
+                    <div class="mt-2">
+                        {{ form.file_field }}
+                    </div>
+                </div>
+                
+            </div>
+            <div class="mt-4">
+                <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-500">Upload</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="loading" style="display: none;">
+        <div class="spinner"></div>
+        <p>Processing...</p>
+    </div>
+</div>
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', function(event) {
+            document.getElementById('loading').style.display = 'flex';
+        });
+    </script>
 </body>
 </html>
