@@ -1,3 +1,5 @@
+{% load custom_filters %}
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -12,50 +14,46 @@
         .pagination a, .pagination span { padding: 8px 12px; text-decoration: none; margin: 0 5px; border: 1px solid #ddd; }
         .pagination a:hover { background-color: #ddd; }
         .pagination .current { background-color: #4CAF50; color: white; border: 1px solid #4CAF50; }
-        .download-btn { background-color: #4CAF50; color: white; border: 1px solid #4CAF50; }
-        .download-btn:hover{ background-color:rgb(60, 218, 65)}
+        .download-btn { background-color: #4CAF50; color: white; border: 1px solid #4CAF50; padding: 8px 12px; text-decoration: none; }
+        .download-btn:hover { background-color: rgb(60, 218, 65); }
     </style>
 </head>
 <body>
+    <form action="{% url 'download-excel' instance %}" method="get">
+        <button type="submit" class="download-btn">Download Excel</button>
+    </form>    
+      
 
-
-
-    {% if page_obj %}
-    <h2>Access ID: {{ page_obj.object_list.0.access_id }}</h2>
-
-    {% if file_id %}
-    <a href="{% url 'download-excel' pk=file_id %}">Download</a>
-
-
-    {% endif %}
-
+<h2>Extracted Data</h2>
+<div>
+    {% for file in files %}
+    File/s uploaded: {{ file.original_name }}
+    {% endfor %}
+</div>
+{% if page_obj %}
     <table>
         <thead>
             <tr>
-                <th>Date</th>
-                <th>In</th>
-                <th>Out</th>
-                <th>In</th>
-                <th>Out</th>
-                <th>In</th>
-                <th>Out</th>
-                <th>Hours Rendered</th>
+                <th>EMPLOYEE ID</th>
+                <th>DATE</th>
+                <th>IN</th>
+                <th>OUT</th>
             </tr>
         </thead>
-        <tbody>
-            {% for entry in page_obj.object_list.0.table %}
-            <tr>
-                <td>{{ entry.date }}</td>
-                <td>{{ entry.in1 }}</td>
-                <td>{{ entry.out1 }}</td>
-                <td>{{ entry.in2 }}</td>
-                <td>{{ entry.out2 }}</td>
-                <td>{{ entry.in3 }}</td>
-                <td>{{ entry.out3 }}</td>
-                <td>{{ entry.hoursrendered }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
+            <tbody>
+                {% for row in page_obj.object_list %}
+                    <tr>
+                        <td>{{ row.access_id }}</td>
+                        <td>{{ row.DATE }}</td>
+                        <td>{{ row.IN }}</td>
+                        <td>{{ row.OUT }}</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="4">No data available for this page.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
     </table>
 
     <!-- Pagination Controls -->
