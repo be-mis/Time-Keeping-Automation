@@ -8,6 +8,7 @@ import json
 from django.core.serializers.json import DjangoJSONEncoder
 from . models import TimeCard
 from datetime import datetime, timedelta
+
 from openpyxl import Workbook
 import xlsxwriter
 from .models import TimeCard
@@ -15,8 +16,6 @@ from collections import defaultdict
 from django.core.paginator import Paginator
 import pdfplumber
 
-
-from datetime import datetime
 
 ALLOWED_FILE_EXTENSIONS = ['pdf','pdfa', 'pdfx','xfdf','fdf','xdp', 'csv', 'xls', 'xlsx', 'xlsm']
 
@@ -42,12 +41,15 @@ def upload_file(request):
                 # Extract data and then delete raw files
                 if store == 'WDS':
                     extract_wds(instance)
+                elif store == 'EVER':
+                    extract_ever(instance)
+                elif store == 'FISHER':
+                    extract_fisher(instance)
                 else:
                     extract_data(instance)
 
                 delete_raw(instance)
                 return redirect('show-data', instance=instance)
-            
     else:
         form = FileFieldForm()
 
@@ -80,18 +82,17 @@ def convert_to_military_time(time_str):
     return time_str  # Return unchanged if format is unexpected
 
 def extract_data(instance):
-    extracted_data = []
     files = TimeCard.objects.filter(instance=instance)
 
     print(f"Found {files.count()} files for instance: {instance}")
 
     if files.exists():
         for file in files:
+            extracted_data = []  # ✅ Reset extracted_data for each file
 
             print(f"Processing file: {file.raw_file.name}")
 
             try:
-                
                 file.raw_file.open("rb")
                 file_content = file.raw_file.read()
                 file.raw_file.close()
@@ -108,19 +109,15 @@ def extract_data(instance):
                     headers = []
 
                     for page_num, page in enumerate(pdf.pages, start=1):
-                        # print(f"Processing page {page_num} for {file.store}")
-
                         text = page.extract_text()
 
-                        # Extract Access ID if available
+                        # Extract Access ID
                         if text:
                             access_id_match = re.search(r"(?:ACCESS ID:\s*|Emp #\s*|EMPLOYEE.*?\(|EMPLOYEENUM\s*)\s*(\d+)", text)
                             if access_id_match:
                                 new_access_id = access_id_match.group(1)
-                                # print(f"Found Access ID: {new_access_id}")
 
                                 if current_access_id and current_table:
-                                    # print(f"Saving data for Access ID: {current_access_id}")
                                     extracted_data.append({
                                         "access_id": current_access_id,
                                         "headers": headers,
@@ -130,27 +127,23 @@ def extract_data(instance):
                                 current_access_id = new_access_id
                                 current_table = []
 
-
+                        # Processing "LEE" store
                         if file.store == "LEE":
                             text = page.extract_text()
                             print(f"Extracted text from page {page_num}:\n{text}\n")
 
                             if text:
-                                lines = text.split("\n")  # Split text into lines
-
-                                # Process table rows dynamically
+                                lines = text.split("\n")
                                 formatted_table = []
 
                                 for line in lines:
                                     words = line.split()
                                     if len(words) < 2 or not re.match(r"\d{1,2}/\d{1,2}/\d{4}", words[0]):
-                                        continue  # Skip invalid lines
+                                        continue
 
-                                    # Extract date and valid time entries
                                     date = words[0]
-                                    time_entries = [t for t in words[1:] if re.match(r"^\d{1,2}:\d{2}$", t)]  # Only time format
+                                    time_entries = [t for t in words[1:] if re.match(r"^\d{1,2}:\d{2}$", t)]
 
-                                    # If only one pair, shift to IN2/OUT2
                                     row_data = {"DATE": date, "IN1": "", "OUT1": "", "IN2": "", "OUT2": "", "IN3": "", "OUT3": "", "HOURS RENDERED": ""}
                                     
                                     if len(time_entries) == 2:
@@ -159,86 +152,73 @@ def extract_data(instance):
                                     else:
                                         in_count, out_count = 1, 1
                                         for i, time in enumerate(time_entries):
-                                            if i % 2 == 0:  # Even index = IN time
+                                            if i % 2 == 0:
                                                 row_data[f"IN{in_count}"] = time[:5]
                                                 in_count += 1
-                                            else:  # Odd index = OUT time
+                                            else:
                                                 row_data[f"OUT{out_count}"] = time[:5]
                                                 out_count += 1
 
                                     formatted_table.append(row_data)
 
-                                # Save LEE in RDS format
                                 extracted_data.append({
                                     "access_id": current_access_id,
                                     "headers": ["DATE", "IN1", "OUT1", "IN2", "OUT2", "IN3", "OUT3", "HOURS RENDERED"],
                                     "table": formatted_table
                                 })
 
+                        # Processing "RDS" store
                         else:
-                            # Extract using table detection for RDS
                             extracted_table = page.extract_table()
 
                             if extracted_table:
-                                # print(f"Extracted table from page {page_num}: {extracted_table}")
-
                                 if not headers:
-                                    headers = extracted_table[0]  # First row contains headers
+                                    headers = extracted_table[0]
 
-                                for row in extracted_table[1:]:  # Skip header row
+                                for row in extracted_table[1:]:
                                     row_data = {}
-
                                     in_count = 1
                                     out_count = 1
 
-                                    excess_in = ""   # Track excess from IN1p@rm3$AN
-                                    excess_out = ""  # Track excess from OUT2
+                                    excess_in = ""
+                                    excess_out = ""
                                     excess_all = []
                                     last_out_col = None
 
                                     for i, column_name in enumerate(headers):
-                                        value = row[i] if i < len(row) and row[i] else ""  # Get value safely
+                                        value = row[i] if i < len(row) and row[i] else ""
 
                                         if "IN" in column_name:
                                             if len(value) > 5:
-                                                row_data[f"IN{in_count}"] = value[:5]  # Store first 5 characters in IN
-                                                excess_in = value[5:].strip()  # Store excess from IN
+                                                row_data[f"IN{in_count}"] = value[:5]
+                                                excess_in = value[5:].strip()
                                                 excess_all.append(excess_in)
-                                                print(f"Excess stored from {column_name}: {excess_in}")  # Debug print
                                             else:
                                                 row_data[f"IN{in_count}"] = value
-                                                excess_in = None  # Reset if no excess
+                                                excess_in = None
                                             in_count += 1
 
                                         elif "OUT" in column_name:
                                             if len(value) > 5:
                                                 row_data[f"OUT{out_count}"] = value[:5]
-                                                excess_out = value[5:].strip()  # Store excess from OUT
+                                                excess_out = value[5:].strip()
                                                 excess_all.append(excess_out)
                                                 last_out_col = f"OUT{out_count}"
-                                                print(f"Excess extracted from {column_name}: {excess_out}")  # Debug print
-                                                print(f"all extracted excess {excess_all}")
-                                                
                                             else:
                                                 row_data[f"OUT{out_count}"] = value
                                                 if value:
                                                     last_out_col = f"OUT{out_count}"
-
-                                            out_count += 1  # Move to the next OUT column
+                                            out_count += 1
 
                                         else:
-                                            row_data[column_name] = value  # Store other columns as is
+                                            row_data[column_name] = value
+
                                     if last_out_col and excess_all:
                                         row_data[last_out_col] = max(excess_all)
-                                        print(f"Assigned max excess {max(excess_all)} to {last_out_col}")  # Debug print
 
-                                    # Append the processed row to the table
-                                    current_table.append(row_data)  # ✅ Ensure data is added
-
-
+                                    current_table.append(row_data)
 
                     if current_access_id and current_table:
-                        # print(f"Finalizing data for Access ID: {current_access_id}")
                         extracted_data.append({
                             "access_id": current_access_id,
                             "headers": headers,
@@ -248,13 +228,14 @@ def extract_data(instance):
             except Exception as e:
                 print(f"Error processing PDF file {file.raw_file.name}: {e}")
                 continue
+
+            # ✅ Save only the data for the current file
             file.extracted_data = extracted_data
             try:
                 file.save()
                 print(f"Successfully saved extracted data for file: {file.raw_file.name}")
             except Exception as e:
                 print(f"Error saving data for file {file.raw_file.name}: {e}")
-
 
         print(f"Data extraction complete for instance: {instance}")
     else:
@@ -348,15 +329,25 @@ def delete_raw(instance):
         file.raw_file.delete(save=True)  # Delete the file
         print(f"Successfully deleted raw file for instance: {instance}")
 
-def show_data(request, instance):
-    files = TimeCard.objects.filter(instance=instance)
 
+def normalize_keys(entry):
+    """Standardizes keys to uppercase and removes spaces in keys like 'In x' and 'Out x'."""
+    normalized_entry = {}
+    for key, value in entry.items():
+        normalized_key = re.sub(r'\s+', '', key.strip().upper())  # Normalize spaces and case
+        normalized_entry[normalized_key] = value
+    return normalized_entry
+
+def show_data(request, instance):
+    files = TimeCard.objects.filter(instance=instance).only("extracted_data", "original_name")  # Optimize query
+    has_data = 0
     if not files.exists():
         return HttpResponse("No extracted data found.")
 
-    extracted_data = []  # Combined extracted data across all files
+    extracted_data = []  # Clear data at the start
 
     for file in files:
+        file_data = []  # Separate list for each file
         if isinstance(file.extracted_data, list):
             for entry in file.extracted_data:
                 access_id = entry.get("access_id")
@@ -364,24 +355,107 @@ def show_data(request, instance):
 
                 if access_id and table_data:
                     for row in table_data:
+                        row = normalize_keys(row)  # Standardize keys dynamically
                         date = row.get("DATE", "")
-                        
-                        # Find the first non-empty IN entry
-                        first_in = None
-                        for i in range(1, 8):  # Adjust the range based on the maximum number of IN entries you expect
-                            in_key = f"IN{i}"
-                            if row.get(in_key):
-                                first_in = row[in_key]
-                                break  # Exit the loop once the first IN is found
 
-                        # Find the last non-empty OUT entry
+                        # Find the first non-empty IN entry dynamically
+                        first_in = next((row[key] for i in range(1, 8) if (key := f"IN{i}") in row and row[key]), None)
+
+                        # Find the last valid non-empty OUT entry dynamically (excluding "0:00" or "00:00")
                         last_out = None
-                        for i in range(7, 0, -1):  # Start from OUT7 down to OUT1
+                        for i in range(7, 0, -1):
                             out_key = f"OUT{i}"
-                            if row.get(out_key):
+                            if out_key in row and row[out_key] not in ["0:00", "00:00", ""]:
                                 last_out = row[out_key]
-                                break  # Exit the loop once the last OUT is found
+                                break
 
+                        # Convert last OUT to military time if needed
+                        if last_out:
+                            match = re.match(r"(\d{1,2}):(\d{2})", last_out)
+                            if match:
+                                hours, minutes = map(int, match.groups())
+
+                                # Convert to military time if hours are less than 12
+                                if hours < 12:
+                                    hours += 12
+
+                                last_out = f"{hours:02d}:{minutes:02d}"
+
+                        file_data.append({
+                            "access_id": access_id,
+                            "DATE": date,
+                            "IN": first_in,
+                            "OUT": last_out
+                        })
+                        if first_in or last_out:
+                            has_data = 1
+
+        # Append each file's data as a separate entry in extracted_data
+        extracted_data.append({
+            "file_name": file.original_name,
+            "data": file_data,
+        })
+
+    # Paginate all extracted data
+    page_number = request.GET.get("page", 1)
+    paginator = Paginator(extracted_data, 5)  # Show 5 files per page
+    page_obj = paginator.get_page(page_number)
+
+    return render(request, "all_data.html", {
+        "page_obj": page_obj,
+        "instance": instance,
+        "has_data": has_data
+    })
+
+def download_all(request, instance):
+    files = TimeCard.objects.filter(instance=instance)
+    rows = []
+    emp_order = []
+
+    for file in files:
+        if isinstance(file.extracted_data, list):
+            for entry in file.extracted_data:
+                # Normalize keys and values
+                normalized_entry = {
+                    key.strip().upper().replace(" ", "").replace("IN", "IN").replace("OUT", "OUT"): 
+                    value.strip() if isinstance(value, str) else value
+                    for key, value in entry.items()
+                }
+
+                access_id = normalized_entry.get("ACCESS_ID", "")
+                table_data = normalized_entry.get("TABLE", [])
+
+                if access_id and table_data:
+                    if access_id not in emp_order:
+                        emp_order.append(access_id)
+
+                    for row in table_data:
+                        normalized_row = {
+                            key.strip().upper().replace(" ", "").replace("IN", "IN").replace("OUT", "OUT"): 
+                            value.strip() if isinstance(value, str) else value
+                            for key, value in row.items()
+                        }
+                        normalized_row["DATE"] = convert_date_format(normalized_row.get("DATE", ""))
+
+                        # First non-empty IN entry that is not "0:00"
+                        first_in = next(
+                            (
+                                str(normalized_row.get(f"IN{i}", "")).strip()
+                                for i in range(1, 8)
+                                if str(normalized_row.get(f"IN{i}", "")).strip() not in ["", "0:00"]
+                            ),
+                            ""
+                        )
+
+                        # Last non-empty OUT entry that is not "0:00"
+                        last_out = next(
+                            (
+                                str(normalized_row.get(f"OUT{i}", "")).strip()
+                                for i in range(7, 0, -1)
+                                if str(normalized_row.get(f"OUT{i}", "")).strip() not in ["", "0:00"]
+                            ),
+                            ""
+                        )
 
                         # Convert last OUT to military time if needed
                         if last_out:
@@ -389,137 +463,261 @@ def show_data(request, instance):
                             if match:
                                 hours, minutes = map(int, match.groups())
                                 if hours < 12:
-                                    hours += 12
-                                last_out = f"{hours}:{minutes:02d}"
+                                    hours += 12  # Assume PM if less than 12
+                                last_out = f"{hours:02d}:{minutes:02d}"
 
-                        extracted_data.append({
-                            "access_id": access_id,
-                            "DATE": date,
-                            "IN": first_in,
-                            "OUT": last_out
-                        })
+                        # Append records
+                        if first_in:
+                            rows.append([access_id, normalized_row.get("DATE", ""), first_in, 1])
+                        if last_out:
+                            rows.append([access_id, normalized_row.get("DATE", ""), last_out, 0])
 
-    # Paginate all extracted data
-    page_number = request.GET.get("page", 1)
-    paginator = Paginator(extracted_data, 100)  # Show 10 entries per page
-    page_obj = paginator.get_page(page_number)
+    if not rows:
+        return HttpResponse("No attendance data available.", status=400)
 
-    return render(request, "all_data.html", {
-        "page_obj": page_obj,
-        "instance": instance,
-        "files":files
-    })
+    df = pd.DataFrame(rows, columns=["Emp_No", "Attend_Date", "Attend_Time", "Attend_Status"])
+    df["Emp_No"] = pd.Categorical(df["Emp_No"], categories=emp_order, ordered=True)
+    df.sort_values(by=["Emp_No", "Attend_Status", "Attend_Date"], ascending=[True, False, True], inplace=True)
 
-def download_all(request, instance):
+    response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    cleaned_name = re.sub(r'[^\w\s-]', '', os.path.splitext(file.original_name)[0].strip()).replace(' ', '_')
+
+    response["Content-Disposition"] = f'attachment; filename="Template_for_{cleaned_name}.xlsx"'
+    response["X-Content-Type-Options"] = "nosniff"
+
+    with pd.ExcelWriter(response, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False)
+
+    return response
+
+
+
+
+def convert_date_format(date_str):
+    # Convert yyyymmdd to mm/dd/yyyy
+    try:
+        if re.match(r'^\d{8}$', date_str):  # Matches 'yyyymmdd' format
+            return datetime.strptime(date_str, "%Y%m%d").strftime("%m/%d/%Y")
+    except ValueError:
+        pass
+    return date_str 
+
+def extract_ever(instance):
     files = TimeCard.objects.filter(instance=instance)
+
+    print(f"Found {files.count()} files for instance: {instance}")
+
+    if files.exists():
+        for file in files:
+            extracted_data = []  # ✅ Reset extracted_data for each file
+
+            print(f"Processing file: {file.raw_file.name}")
+
+            try:
+                file.raw_file.open("rb")
+                file_content = file.raw_file.read()
+                file.raw_file.close()
+            except Exception as e:
+                print(f"Error reading file {file.raw_file.name}: {e}")
+                continue
+
+            file_like_object = io.BytesIO(file_content)
+
+            try:
+                with pdfplumber.open(file_like_object) as pdf:
+                    current_access_id = None
+                    current_table = []
+                    headers = []
+
+                    for page_num, page in enumerate(pdf.pages, start=1):
+                        text = page.extract_text()
+                        print(f"Page {page_num} text content:\n{text}\n")
+
+                        # Extract Access ID (Emp #) from below the table
+                        if text:
+                            emp_match = re.search(r"(?:ID:\s*)(\d+)-", text)
+                            if emp_match:
+                                current_access_id = emp_match.group(1)
+                                print(f"Found Emp #: {current_access_id}")
+
+                        extracted_table = page.extract_table()
+                        print(f"Page {page_num} extracted table:\n{extracted_table}\n")
+
+                        if extracted_table:
+                            if not headers:
+                                headers = extracted_table[0]
+
+                            for row in extracted_table[1:]:
+                                row_data = {}
+                                in_count = 1
+                                out_count = 1
+
+                                excess_in = ""
+                                excess_out = ""
+                                excess_all = []
+                                last_out_col = None
+
+                                for i, column_name in enumerate(headers):
+                                    value = row[i] if i < len(row) and row[i] else ""
+
+                                    if "DATE" in column_name.upper():
+                                        value = value
+
+                                    # Clean value directly with regex
+                                    value = re.sub(r'[^0-9:]', '', value.strip())  # Keep only numbers and colons
+                                    value = re.sub(r'\s*(am|pm)\s*$', '', value, flags=re.IGNORECASE)  # Remove "am/pm"
+                                    
+
+                                    if "IN" in column_name:
+                                        if value in ["0:00", "00:00"]:
+                                            value = ""  # Filter out invalid times
+
+                                        if len(value) > 5:
+                                            row_data[f"IN{in_count}"] = value[:5]
+                                            excess_in = value[5:].strip()
+                                            excess_all.append(excess_in)
+                                        else:
+                                            row_data[f"IN{in_count}"] = value
+                                            excess_in = None
+                                        in_count += 1
+
+                                    elif "OUT" in column_name:
+                                        if value in ["0:00", "00:00"]:
+                                            value = ""  # Filter out invalid times
+
+                                        if len(value) > 5:
+                                            cleaned_value = value[:5]  # Trim to 5 characters
+                                            row_data[f"OUT{out_count}"] = cleaned_value if cleaned_value else ""
+                                            excess_out = value[5:].strip()
+                                            excess_all.append(excess_out)
+                                            last_out_col = f"OUT{out_count}"
+                                        else:
+                                            row_data[f"OUT{out_count}"] = value if value else ""
+                                            if value:
+                                                last_out_col = f"OUT{out_count}"
+                                        out_count += 1
+
+                                    else:
+                                        row_data[column_name] = value
+
+
+                                current_table.append(row_data)
+
+                    if current_access_id and current_table:
+                        extracted_data.append({
+                            "access_id": current_access_id,
+                            "headers": headers,
+                            "table": current_table
+                        })
+                        print(f"Extracted data for Emp #: {current_access_id}: {extracted_data}")
+
+            except Exception as e:
+                print(f"Error processing PDF file {file.raw_file.name}: {e}")
+                continue
+
+            # ✅ Save only the data for the current file
+            if extracted_data:
+                for data in extracted_data:
+                    for row in data["table"]:
+                        if "DATE" in row:
+                            row["DATE"] = row["DATE"]
+
+                file.extracted_data = extracted_data
+                print(f"Data to be saved: {file.extracted_data}")
+                try:
+                    file.save()
+                    print(f"Successfully saved extracted data for file: {file.raw_file.name}")
+                except Exception as e:
+                    print(f"Error saving data for file {file.raw_file.name}: {e}")
+            else:
+                print(f"No valid data found for file: {file.raw_file.name}")
+
+        print(f"Data extraction complete for instance: {instance}")
+    else:
+        print("No files found for the provided instance.")
+        return HttpResponse("No files found for the provided instance.")
+
+def extract_fisher(instance):
+    files = TimeCard.objects.filter(instance=instance)
+
     for file in files:
+        records = defaultdict(lambda: {"user_id": None, "times": []})  # ✅ Group by date, store user_id
+
         try:
-            data = file.extracted_data  
+            file.raw_file.open("rb")
+            file_content = file.raw_file.read()
+            file.raw_file.close()
+        except Exception as e:
+            print(f"Error reading file {file.raw_file.name}: {e}")
+            continue
 
-            if isinstance(data, str):  
-                # print("Extracted data is a string, parsing JSON...")  # Debug print
-                data = json.loads(data)
+        file_like_object = io.BytesIO(file_content)
 
-            # print("Extracted Data:", json.dumps(data, indent=4))  # Debug print
-
-            rows = []
-            emp_order = []
-
-            for record in data:
-                emp_no = record.get("access_id", "UNKNOWN_ID")
-                # print(f"Processing Access ID: {emp_no}")  # Debug print
-
-                if emp_no not in emp_order:
-                    emp_order.append(emp_no)
-
-                for entry in record.get("table", []):
-                    # print("Raw Entry Data:", entry)  # Debug print
-
-                    # Ensure DATE key exists
-                    attend_date = entry.get("DATE") or entry.get("Date") or entry.get("date")
-                    if not attend_date:
-                        print(f"Skipping entry, no valid DATE key found: {entry}")  # Debug print
+        try:
+            with pdfplumber.open(file_like_object) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if not text:
                         continue
 
-                    # Select FIRST available IN
-                    attend_time_in = None
-                    for i in range(1, 8):  # Adjust the range based on the maximum number of IN entries you expect
-                        in_key = f"IN{i}"
-                        if entry.get(in_key):
-                            attend_time_in = entry[in_key]
-                            break  # Exit the loop once the first IN is found
-                    attend_status_in = 1 if attend_time_in else None  
+                    for line in text.split("\n"):
+                        columns = line.split()
 
-                    # Select LAST available OUT dynamically
-                    attend_time_out = None
-                    for i in range(7, 0, -1):  # Start from OUT7 down to OUT1
-                        out_key = f"OUT{i}"
-                        if entry.get(out_key):
-                            attend_time_out = entry[out_key]
-                            break  # Exit the loop once the last OUT is found
+                        if len(columns) < 5:
+                            continue
 
-                    attend_time_out = convert_to_military_time(attend_time_out) if attend_time_out else None
-                    attend_status_out = 0 if attend_time_out else None  
+                        try:
+                            time_str = f"{columns[1]} {columns[2]} {columns[3]}"
+                            time_obj = datetime.strptime(time_str, "%m/%d/%Y %I:%M:%S %p")
+                            date_key = time_obj.strftime("%Y%m%d")  # YYYYMMDD format for grouping
+                            time_val = time_obj.strftime("%H:%M")  # HH:MM format
+                            user_id = columns[4]  # Extract user_id
+                        except ValueError:
+                            continue
 
-                    # Append IN record if available
-                    if attend_time_in:
-                        rows.append([emp_no, attend_date, attend_time_in, attend_status_in])
-
-                    # Append OUT record if available
-                    if attend_time_out:
-                        rows.append([emp_no, attend_date, attend_time_out, attend_status_out])
-
-            if not rows:
-                # print("No valid attendance data found!")  # Debug print
-                return HttpResponse("No attendance data available.", status=400)
-
-            df = pd.DataFrame(rows, columns=["Emp_No", "Attend_Date", "Attend_Time", "Attend_Status"])
-            # print("Generated DataFrame:")  
-            # print(df)  # Debug print
-
-            # Ensure Emp_No order is preserved, and INs (1s) come before OUTs (0s) for each Emp_No
-            df["Emp_No"] = pd.Categorical(df["Emp_No"], categories=emp_order, ordered=True)
-            df.sort_values(by=["Emp_No", "Attend_Status", "Attend_Date"], ascending=[True, False, True], inplace=True)
-
-            response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            response["Content-Disposition"] = f'attachment; filename="Template for {file.original_name}.xlsx"'
-
-            with pd.ExcelWriter(response, engine="xlsxwriter") as writer:
-                df.to_excel(writer, index=False)
-
-            # print("Excel file successfully generated!")  # Debug print
-            return response
-
-        except TimeCard.DoesNotExist:
-            # print(f"Error: TimeCard ID {pk} not found!")  # Debug print
-            return HttpResponse("File not found", status=404)
+                        records[date_key]["times"].append(time_val)  # ✅ Store timestamps for this date
+                        records[date_key]["user_id"] = user_id  # ✅ Ensure access_id is set
 
         except Exception as e:
-            # print(f"Unexpected error: {e}")  # Debug print
-            return HttpResponse(f"Error: {str(e)}", status=500)
+            print(f"Error processing PDF file {file.raw_file.name}: {e}")
+            continue
 
+        # ✅ Convert grouped records into final format
+        extracted_data = []
 
+        for date, data in records.items():
+            times = sorted(data["times"])  # ✅ Ensure sorted timestamps
+            access_id = data["user_id"]  # ✅ Use extracted user_id as access_id
 
+            # ✅ Convert YYYYMMDD → MM/DD/YYYY
+            formatted_date = datetime.strptime(date, "%Y%m%d").strftime("%m/%d/%Y")
 
+            row = {"Date": formatted_date, "Total Hrs": "8"}  # Default total hours
 
+            # ✅ Assign time slots
+            for i in range(8):
+                key = f"In {i//2 + 1}" if i % 2 == 0 else f"Out {i//2 + 1}"
+                row[key] = times[i] if i < len(times) else "0:00"
 
+            row["Status"] = ""  # Add status field
+            extracted_data.append(row)
 
+        final_data = [{
+            "access_id": access_id,  # ✅ Correctly set access_id
+            "headers": ["Date", "Total Hrs", "In 1", "Out 1", "In 2", "Out 2", "In 3", "Out 3", "In 4", "Out 4", "Status"],
+            "table": extracted_data
+        }]
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        # ✅ Save structured data
+        if final_data:
+            file.extracted_data = final_data
+            try:
+                file.save()
+                print(f"Successfully saved formatted data for {file.raw_file.name}")
+            except Exception as e:
+                print(f"Error saving data for {file.raw_file.name}: {e}")
+        else:
+            print(f"No valid data found for {file.raw_file.name}")
 
 
 
